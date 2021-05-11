@@ -1,13 +1,16 @@
-import subprocess
-import os, sys, getopt, time
+import subprocess, atexit
+import os, sys, signal, getopt, time
 import psutil
+
+#on keyboard interrupt, dont print trace
+signal.signal(signal.SIGINT, lambda x, y: sys.exit(0))
 
 #https://stackoverflow.com/questions/9319317/quick-and-easy-file-dialog-in-python
 #add gui and make it a real not command line project?
 
 def main():
     args = sys.argv[1:]
-
+    #py file.py "path to folder" "fast" "5"
     path = os.path.join(args[0])
     preset = args[1]
     if(len(args) == 3):
@@ -32,7 +35,7 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5):
     #set process priority to low so subprocess ffmpeg processes start as low.
     psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
 
-    processes = []
+    
     codes = []
     hw = False
     for file in os.listdir(path):
@@ -79,5 +82,21 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5):
     return codes
 
 #def reduceVideo(filePath, outName, hevc = True, preset='slow'):
-if __name__ == "__main__":
+
+def cleanup():
+    print("closing ffmpeg subprocesses")
+    closed = 0
+    total = len(processes)
+    for p in processes:
+        if(p[1].poll() == None):
+            p[1].terminate()
+            p[1].wait()
+            closed += 1
+        print("%i/%i closed (name: %s)" % (closed, total, p[0]))
+    return
+
+if(__name__ == "__main__"):
+    global processes
+    processes = []
+    atexit.register(cleanup)
     main()
