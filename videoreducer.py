@@ -1,5 +1,5 @@
 import subprocess, atexit, threading
-import os, sys, signal, getopt, time
+import os, sys, signal, argparse, time
 import psutil
 
 #on keyboard interrupt, dont print trace
@@ -43,7 +43,10 @@ class inputHandlerThread(threading.Thread):
            
             elif(self.lastInput == "t"):
                 print(str(time.time()-startReduceTime) +"s since start")
-            
+
+            elif(self.lastInput == "?"):
+                print("type p to list progress, t to list elapsed time, l to list current files, exit to shutdown the program, and ? to see this menu again")
+
             time.sleep(0.1)
         return
 
@@ -52,26 +55,25 @@ class inputHandlerThread(threading.Thread):
 
 
 def main():
-    atexit.register(cleanup)
-
-    args = sys.argv[1:]
-    #py file.py "path to folder" "fast" "5"
-    path = os.path.join(args[0])
-    preset = args[1]
-    if(len(args) == 3):
-        pmax = int(args[2])
-    else:
-        pmax = 5
-    hevc = True
+    parser = argparse.ArgumentParser(description="Batch-reduce filesize of video files in directory with ffmpeg")
+    parser.add_argument('path', type=str, metavar="\"Path/To/Videos\"", help="Directory to read files from")
+    parser.add_argument('-p', '--preset', type=str, dest="preset", default="fast", help="FFmpeg encoding speed preset")
+    parser.add_argument('-n', '--number_processes', type=int, default=5, dest="pmax", help="Number of FFmpeg processes allowed to run concurrently")
+    parser.add_argument('--hevc', default=False, action='store_true', help="Encode to HEVC codec?")
+    parser.add_argument('--hw', default=False, action='store_true', help="Hardware Encoding enabled (AMD only)?")
+    parser.add_argument('-v','--verbosity', type=int, default=1, choices=range(0,3), help="Verbosity of output, 0 = silent, 1 = normal, 2 = verbose")
+    args = parser.parse_args()
     global startReduceTime
     startReduceTime = time.time()
 
-    if(os.path.isdir(path)):
-        print("Beginning at " + time.strftime("%H:%M:%S", time.localtime()))
-        statuses = reduceDir(path, True, preset, pmax)
+    if(os.path.isdir(args.path)):
+        if(args.verbosity > 0):
+            print("Beginning at " + time.strftime("%H:%M:%S", time.localtime()))
+        statuses = reduceDir(args.path, args.hevc, args.preset, args.pmax, args.hw, args.verbosity)
     else:
         print("Invalid directory")
         return -1
+    
     errs = []
     for s in statuses:
         if(s[0] != 0):
@@ -83,7 +85,7 @@ def main():
 
 
 
-def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
+def reduceDir(path, hevc, preset, pmax, hw, ol):
     #set process priority to low so subprocess ffmpeg processes start as low.
     psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
 
@@ -92,11 +94,14 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
     total = 0
     completed = 0
 
+    atexit.register(cleanup, ol)
+
     #launch input handler thread
     inputThread = inputHandlerThread()
     threads.append(inputThread)
     inputThread.start()
-
+    if(ol > 0):
+        print("type p to list progress, t to list elapsed time, l to list current files, exit to shutdown the program, and ? to see this menu again")
     
     for file in os.listdir(path):
         if(file.endswith(".mp4")):
@@ -105,12 +110,24 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
             if(exitFlag):
                 sys.exit(1)
             if(file.endswith(".mp4")):
-                #print("Beginning " + file)
+                if(ol > 1):
+                    print("Beginning " + file)
                 #ffmpeg command construction
                 outLevel = 'error'
                 outputLevel = ['-loglevel', outLevel]
                 inputArgs = ['-i', os.path.abspath(os.path.join(path, file))]
-                codecArgs = ['-c:v', 'hevc_amf', '-c:a', 'copy'] if (hevc and hw) else ['-c:v', 'libx265', '-preset', preset, '-x265-params', 'log-level=error', '-c:a', 'copy']
+                codecArgs = ['-c:v']
+                if(hw):
+                    if(hevc):
+                        codecArgs.append('hevc_amf')
+                    else:
+                        codecArgs.append('h264_amf')
+                else:
+                    if(hevc):
+                        codecArgs.extend(['libx265','-preset', preset, '-x265-params', 'log-level=error'])
+                    else:
+                        codecArgs.extend(['libx264', '-preset', preset])
+                codecArgs.extend(['-c:a', 'copy'])
                 outputArgs = [os.path.abspath(os.path.join(path + '\out', file[0:file.rfind('.')])) + '-reduced_' + preset + '.mp4']
                 argslist = [
                     'ffmpeg',
@@ -121,7 +138,6 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
                     *codecArgs,
                     *outputArgs
                     ]
-                
                 processes.append([file, subprocess.Popen(argslist, stdin=subprocess.DEVNULL), time.time()])
             else:
                 #dont need to iterate over non mp4 files
@@ -134,9 +150,11 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
                             codes.append([p[0],p[1].returncode])
                         else:
                             codes.append([p[1].returncode])
-                        print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
                         completed += 1
-                        print(str(completed) + "/" + str(total) + " complete")
+                        if(ol > 1):
+                            print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
+                        if(ol > 0):
+                            print(str(completed) + "/" + str(total) + " complete")
                         processes.remove(p)
                 #reduce busy waiting
                 time.sleep(.1)
@@ -148,30 +166,33 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
                     codes.append([p[0],p[1].returncode])
                 else:
                     codes.append([p[1].returncode])
-                print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
                 completed += 1
-                print(str(completed) + "/" + str(total) + " complete")
+                if(ol > 1):
+                    print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
+                if(ol > 0):
+                    print(str(completed) + "/" + str(total) + " complete")
                 processes.remove(p)
         time.sleep(.1)
     return codes
 
 
-def cleanup():
+def cleanup(ol=1):
     remain = len(processes)
     if(remain > 0):
         closed = 0
-        print("interrupting ffmpeg subprocesses")
+        if(ol > 0):
+            print("interrupting ffmpeg subprocesses")
         for p in processes:
             if(p[1].poll() == None):
                 p[1].terminate()
                 p[1].wait()
             closed += 1
-            print("%i/%i interrupted (name: %s)" % (closed, remain, p[0]))
-    print("threads: ")
+            if(ol > 0):
+                print("%i/%i interrupted (name: %s)" % (closed, remain, p[0]))
     for t in threads:
-        print(t)
         if(t.is_alive()):
-            print("thread " + t.name + " alive, stopping and joining")
+            if(ol > 0):
+                print("thread " + t.name + " alive, stopping and joining")
             t.stop()
             t.join()
     return
