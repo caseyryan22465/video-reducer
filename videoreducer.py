@@ -42,6 +42,11 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
     #set process priority to low so subprocess ffmpeg processes start as low.
     psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
     codes = []
+    total = 0
+    completed = 0
+    for file in os.listdir(path):
+        if(file.endswith(".mp4")):
+                total += 1
     for file in os.listdir(path):
             if(file.endswith(".mp4")):
                 #start = time.strftime("%H:%M:%S" ,time.localtime())
@@ -74,11 +79,12 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
                         else:
                             codes.append([p[1].returncode])
                         print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
+                        completed += 1
+                        print(str(completed) + "/" + str(total) + " complete")
                         processes.remove(p)
                 #reduce busy waiting
                 time.sleep(.1)
 
-    #program gets here very early on. wasteful
     while(len(processes) > 0):
         for p in processes:
             if(p[1].poll() != None):
@@ -87,23 +93,24 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
                 else:
                     codes.append([p[1].returncode])
                 print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
+                completed += 1
+                print(str(completed) + "/" + str(total) + " complete")
                 processes.remove(p)
         time.sleep(.1)
     return codes
 
-#def reduceVideo(filePath, outName, hevc = True, preset='slow'):
 
 def cleanup():
-    total = len(processes)
-    if(total > 0):
+    remain = len(processes)
+    if(remain > 0):
         closed = 0
         print("interrupting ffmpeg subprocesses")
         for p in processes:
             if(p[1].poll() == None):
                 p[1].terminate()
                 p[1].wait()
-                closed += 1
-            print("%i/%i interrupted (name: %s)" % (closed, total, p[0]))
+            closed += 1
+            print("%i/%i interrupted (name: %s)" % (closed, remain, p[0]))
     return
 
 if(__name__ == "__main__"):
