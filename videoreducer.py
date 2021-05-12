@@ -7,8 +7,9 @@ signal.signal(signal.SIGINT, lambda x, y: sys.exit(0))
 
 #https://stackoverflow.com/questions/9319317/quick-and-easy-file-dialog-in-python
 #add gui and make it a real not command line project?
-
+processes = []
 def main():
+    atexit.register(cleanup)
     args = sys.argv[1:]
     #py file.py "path to folder" "fast" "5"
     path = os.path.join(args[0])
@@ -27,17 +28,20 @@ def main():
     else:
         print("Invalid directory")
         return -1
-    print(statuses)
+    errs = []
+    for s in statuses:
+        if(s[0] != 0):
+            errs.append(s)
+    if(len(errs) > 0):
+        print("Errors: " + str(errs))
+    
     print("Finished " + str(len(statuses)) + " reductions in " + str(time.time()-startReduceTime)+ "s")
     
-def reduceDir(path, hevc=True, preset='fast', pmax=5):
+def reduceDir(path, hevc=True, preset='fast', pmax=5, hw = False):
     #https://stackoverflow.com/questions/46849574/start-process-with-low-priority-popen
     #set process priority to low so subprocess ffmpeg processes start as low.
     psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-
-    
     codes = []
-    hw = False
     for file in os.listdir(path):
             if(file.endswith(".mp4")):
                 #start = time.strftime("%H:%M:%S" ,time.localtime())
@@ -58,24 +62,30 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5):
                     *outputArgs
                     ]
                 processes.append([file, subprocess.Popen(argslist), time.time()])
+            else:
+                #dont need to iterate over non mp4 files
+                continue
 
-                #had lines 65-69 up here too to not only check for when len(p) > pmax, but all the time. However I don't know if checking all processes for finish every time a new one is created is useful or cheaper than just waiting til needed.
-
-            #could use multithreading to constantly check for finished processes, only checking when processes>pmax might be wasteful/bottleneck
             while(len(processes) >= pmax):
                 for p in processes:
-                    if(p[1].poll() == 0):
-                        codes.append(p[1].returncode)
+                    if(p[1].poll() != None):
+                        if(p[1].returncode != 0):
+                            codes.append([p[0],p[1].returncode])
+                        else:
+                            codes.append([p[1].returncode])
                         print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
                         processes.remove(p)
-                #reduce busy waiting?
+                #reduce busy waiting
                 time.sleep(.1)
 
     #program gets here very early on. wasteful
     while(len(processes) > 0):
         for p in processes:
-            if(p[1].poll() == 0):
-                codes.append(p[1].returncode)
+            if(p[1].poll() != None):
+                if(p[1].returncode != 0):
+                    codes.append([p[0],p[1].returncode])
+                else:
+                    codes.append([p[1].returncode])
                 print(p[0] + " exited after " + str(time.time() - p[2])[:-13] + 's')
                 processes.remove(p)
         time.sleep(.1)
@@ -84,19 +94,17 @@ def reduceDir(path, hevc=True, preset='fast', pmax=5):
 #def reduceVideo(filePath, outName, hevc = True, preset='slow'):
 
 def cleanup():
-    print("closing ffmpeg subprocesses")
-    closed = 0
     total = len(processes)
-    for p in processes:
-        if(p[1].poll() == None):
-            p[1].terminate()
-            p[1].wait()
-            closed += 1
-        print("%i/%i closed (name: %s)" % (closed, total, p[0]))
+    if(total > 0):
+        closed = 0
+        print("interrupting ffmpeg subprocesses")
+        for p in processes:
+            if(p[1].poll() == None):
+                p[1].terminate()
+                p[1].wait()
+                closed += 1
+            print("%i/%i interrupted (name: %s)" % (closed, total, p[0]))
     return
 
 if(__name__ == "__main__"):
-    global processes
-    processes = []
-    atexit.register(cleanup)
     main()
