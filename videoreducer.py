@@ -8,6 +8,8 @@ signal.signal(signal.SIGINT, lambda x, y: sys.exit(1))
 processes = []
 threads = []
 exitFlag = False
+stopFlag = False
+
 class inputHandlerThread(threading.Thread):
     def __init__(self):
         super(inputHandlerThread, self).__init__()
@@ -16,9 +18,10 @@ class inputHandlerThread(threading.Thread):
 
     def run(self):
         global exitFlag
+        global stopFlag
         while(self.alive):
             try:
-                self.lastInput = input()
+                self.lastInput = input()#blocking call, thread hangs unless called via stop/exit
             except (EOFError):
                 exitFlag = True
                 self.alive = False
@@ -30,6 +33,9 @@ class inputHandlerThread(threading.Thread):
             elif(self.lastInput == 'r'):#list process returncodes
                 print(str([p[1].returncode for p in processes]))
 
+            elif(self.lastInput == "stop"):#stop program nicely (wait for still running processes to finish)
+                stopFlag = True
+            
             elif(self.lastInput == "exit"):#exit program without keyboardinterrupt
                 exitFlag = True
                 self.alive = False
@@ -45,9 +51,8 @@ class inputHandlerThread(threading.Thread):
                 print(str(time.time()-startReduceTime) +"s since start")
 
             elif(self.lastInput == "?"):
-                print("type p to list progress, t to list elapsed time, l to list current files, exit to shutdown the program, and ? to see this menu again")
-
-            time.sleep(0.1)
+                print("type p to list progress, t to list elapsed time, l to list current files, stop to stop execution after current files finish, exit to hard shutdown the program, and ? to see this menu again")
+            #dont need time sleep for busy wait prevention, input() is blocking
         return
 
     def stop(self):
@@ -65,7 +70,7 @@ def main():
     args = parser.parse_args()
     global startReduceTime
     startReduceTime = time.time()
-
+    atexit.register(cleanup, args.verbosity)
     if(os.path.isdir(args.path)):
         if(args.verbosity > 0):
             print("Beginning at " + time.strftime("%H:%M:%S", time.localtime()))
@@ -82,8 +87,29 @@ def main():
         print("Errors: " + str(errs))
     
     print("Finished " + str(len(statuses)) + " reductions in " + str(time.time()-startReduceTime)+ "s")
+    if not (exitFlag):
+        cleanup(args.verbosity)
 
-
+def cleanup(ol=1):
+    remain = len(processes)
+    if(remain > 0):
+        closed = 0
+        if(ol > 0):
+            print("interrupting ffmpeg subprocesses")
+        for p in processes:
+            if(p[1].poll() == None):
+                p[1].terminate()
+                p[1].wait()
+            closed += 1
+            if(ol > 0):
+                print("%i/%i interrupted (name: %s)" % (closed, remain, p[0]))
+    for t in threads:
+        if(t.is_alive()):
+            if(ol > 0):
+                print("thread " + t.name + " alive, stopping and joining (if stuck try inputting enter)")
+            t.stop()
+            t.join()
+    return
 
 def reduceDir(path, hevc, preset, pmax, hw, ol):
     #set process priority to low so subprocess ffmpeg processes start as low.
@@ -94,21 +120,24 @@ def reduceDir(path, hevc, preset, pmax, hw, ol):
     total = 0
     completed = 0
 
-    atexit.register(cleanup, ol)
+    
 
     #launch input handler thread
     inputThread = inputHandlerThread()
     threads.append(inputThread)
     inputThread.start()
     if(ol > 0):
-        print("type p to list progress, t to list elapsed time, l to list current files, exit to shutdown the program, and ? to see this menu again")
-    
+        print("type p to list progress, t to list elapsed time, l to list current files, stop to stop execution after current files finish, exit to shutdown the program, and ? to see this menu again")
     for file in os.listdir(path):
         if(file.endswith(".mp4")):
                 total += 1
     for file in os.listdir(path):#beginning actual utility
             if(exitFlag):
                 sys.exit(1)
+            if(stopFlag):
+                print("Stopping execution after in-progress reductions finish")
+                codes = waitRemaining(codes, ol, completed)
+                return codes
             if(file.endswith(".mp4")):
                 if(ol > 1):
                     print("Beginning " + file)
@@ -143,7 +172,7 @@ def reduceDir(path, hevc, preset, pmax, hw, ol):
                 #dont need to iterate over non mp4 files
                 continue
 
-            while(len(processes) >= pmax and not exitFlag):
+            while(len(processes) >= pmax and not (exitFlag or stopFlag)):
                 for p in processes:
                     if(p[1].poll() != None):
                         if(p[1].returncode != 0):
@@ -158,7 +187,11 @@ def reduceDir(path, hevc, preset, pmax, hw, ol):
                         processes.remove(p)
                 #reduce busy waiting
                 time.sleep(.1)
+    
+    codes = waitRemaining(codes, ol, completed)
+    return codes
 
+def waitRemaining(codes, ol, completed):
     while(len(processes) > 0 and not exitFlag):
         for p in processes:
             if(p[1].poll() != None):
@@ -174,28 +207,9 @@ def reduceDir(path, hevc, preset, pmax, hw, ol):
                 processes.remove(p)
         time.sleep(.1)
     return codes
+    
 
 
-def cleanup(ol=1):
-    remain = len(processes)
-    if(remain > 0):
-        closed = 0
-        if(ol > 0):
-            print("interrupting ffmpeg subprocesses")
-        for p in processes:
-            if(p[1].poll() == None):
-                p[1].terminate()
-                p[1].wait()
-            closed += 1
-            if(ol > 0):
-                print("%i/%i interrupted (name: %s)" % (closed, remain, p[0]))
-    for t in threads:
-        if(t.is_alive()):
-            if(ol > 0):
-                print("thread " + t.name + " alive, stopping and joining")
-            t.stop()
-            t.join()
-    return
 
 if(__name__ == "__main__"):
     main()
