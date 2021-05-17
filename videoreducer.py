@@ -3,7 +3,7 @@ import os, sys, signal, argparse, time
 import psutil
 
 #on keyboard interrupt, dont print trace
-signal.signal(signal.SIGINT, lambda x, y: sys.exit(1))
+signal.signal(signal.SIGINT, lambda x, y: sys.exit(1))#TODO: SIGINT on linux
 
 processes = []
 threads = []
@@ -114,7 +114,10 @@ def cleanup(ol=1):
 
 def reduceDir(path, hevc, preset, pmax, hw, ol):
     #set process priority to low so subprocess ffmpeg processes start as low.
-    #psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+    if(sys.version == 'linux'):
+        psutil.Process().nice(psutil.Process().nice() + 1)#priority is 1 lower than originally started as, need to make sure it doesnt exceed the minimum (20? man nice)
+    elif(sys.version == 'windows'):
+        psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
 
     global total, completed
     codes = []
