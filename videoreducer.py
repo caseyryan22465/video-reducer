@@ -45,6 +45,7 @@ class inputHandlerThread(threading.Thread):
                 print(threads)
 
             elif(self.lastInput == "p"):#print progress
+                global completed, total
                 print(str(completed) + "/" + str(total) +" files complete")
            
             elif(self.lastInput == "t"):
@@ -113,7 +114,7 @@ def cleanup(ol=1):
 
 def reduceDir(path, hevc, preset, pmax, hw, ol):
     #set process priority to low so subprocess ffmpeg processes start as low.
-    psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+    #psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
 
     global total, completed
     codes = []
@@ -157,7 +158,9 @@ def reduceDir(path, hevc, preset, pmax, hw, ol):
                     else:
                         codecArgs.extend(['libx264', '-preset', preset])
                 codecArgs.extend(['-c:a', 'copy'])
-                outputArgs = [os.path.abspath(os.path.join(path + '\out', file[0:file.rfind('.')])) + '-reduced_' + preset + '.mp4']
+                if not(os.path.isdir(os.path.join(path,'out'))):
+                    os.mkdir(os.path.join(path, 'out'))
+                outputArgs = [os.path.abspath(os.path.join(os.path.join(path,'out'), file[0:file.rfind('.')]) + '-reduced_' + preset +'.mp4')]
                 argslist = [
                     'ffmpeg',
                     '-y',
